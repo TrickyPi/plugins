@@ -158,3 +158,12 @@ test.sequential('copy the file according to destDir option', async () => {
     destDir: join(__dirname, 'output/dest')
   });
 });
+test.sequential('loads files imported with import attributes', async () => {
+  const rawId = resolve('fixtures/png.png');
+  const code = await url().load.call(
+    { addWatchFile() {} },
+    `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'image' }))}`,
+    { rawId }
+  );
+  expect(code).toMatch(/^export default "data:image\/png;base64,/);
+});
