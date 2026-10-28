@@ -78,3 +78,19 @@ test('uses a custom processor with id', async () => {
   });
   return testBundle(bundle);
 });
+
+test('converts csv files imported with import attributes', async () => {
+  const rawId = 'data.csv';
+  const id = `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'csv' }))}`;
+  let processedId;
+  const plugin = dsv({
+    include: '**/*.csv',
+    processRow(row, rowId) {
+      processedId = rowId;
+    }
+  });
+
+  expect(plugin.transform.filter.id.test(id)).toBe(true);
+  expect(plugin.transform.handler('a,b\n1,2', id, { rawId }).code).toContain('b:"2"');
+  expect(processedId).toBe(rawId);
+});
