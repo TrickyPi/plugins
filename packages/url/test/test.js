@@ -158,3 +158,31 @@ test.sequential('copy the file according to destDir option', async () => {
     destDir: join(__dirname, 'output/dest')
   });
 });
+test.sequential('loads files imported with import attributes', async () => {
+  const rawId = resolve('fixtures/png.png');
+  const code = await url().load.call(
+    { addWatchFile() {} },
+    `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'image' }))}`,
+    { rawId }
+  );
+  expect(code).toMatch(/^export default "data:image\/png;base64,/);
+});
+test.sequential('copies files imported with import attributes', async () => {
+  const rawId = resolve('fixtures/png.png');
+  const plugin = url({
+    limit: 0,
+    emitFiles: true,
+    fileName: '[dirname][name][extname]'
+  });
+  const code = await plugin.load.call(
+    { addWatchFile() {} },
+    `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'image' }))}`,
+    { rawId }
+  );
+  await plugin.generateBundle({ dir: outputDir });
+
+  expect(code).toBe('export default "fixtures/png.png"');
+  expect(await globby(join(outputDir, '**/*.png').split(sep).join(posix.sep))).toEqual([
+    'output/fixtures/png.png'
+  ]);
+});
