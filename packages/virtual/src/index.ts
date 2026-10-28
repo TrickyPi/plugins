@@ -30,9 +30,10 @@ export default function virtual(modules: RollupVirtualOptions): Plugin {
       return null;
     },
 
-    load(id) {
-      if (id.startsWith(PREFIX)) {
-        const idNoPrefix = id.slice(PREFIX.length);
+    load(id, loadOptions?: { rawId?: string; attributes?: Record<string, string> }) {
+      const rawId = (loadOptions && loadOptions.rawId) || id;
+      if (rawId.startsWith(PREFIX)) {
+        const idNoPrefix = rawId.slice(PREFIX.length);
 
         return idNoPrefix in modules ? modules[idNoPrefix] : resolvedIds.get(idNoPrefix);
       }
