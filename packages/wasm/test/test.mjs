@@ -27,6 +27,14 @@ const testBundle = async (t, bundle) => {
   const func = new AsyncFunction('t', `let result;\n\n${code}\n\nreturn result;`);
   return func(t);
 };
+test('loads and transforms wasm files imported with import attributes', async () => {
+  const rawId = join(DIRNAME, 'fixtures/sample.wasm');
+  const id = `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'webassembly' }))}`;
+  const plugin = wasmPlugin();
+  const binary = await plugin.load.call({ addWatchFile() {} }, id, { rawId });
+  const { code } = plugin.transform.call({}, binary, id, { rawId });
+  expect(code).toContain('_loadWasmModule(0, null, ');
+});
 test('async compiling', async () => {
   expect.assertions(2);
   const bundle = await rollup({
