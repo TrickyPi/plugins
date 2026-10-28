@@ -264,3 +264,19 @@ test('does not process non-custom extensions', async () => {
 
   expect(output).toBeNull();
 });
+
+test('handles yaml files imported with import attributes', async () => {
+  const rawId = 'testfile.yaml';
+  const id = `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'yaml' }))}`;
+  let transformedFilePath;
+  const plugin = yaml({
+    include: '**/*.yaml',
+    transform(data, filePath) {
+      transformedFilePath = filePath;
+    }
+  });
+
+  expect(plugin.transform.filter.id.test(id)).toBe(true);
+  expect(plugin.transform.handler('foo: bar', id, { rawId }).code).toContain('foo');
+  expect(transformedFilePath).toBe(rawId);
+});
