@@ -49,3 +49,14 @@ test('imports an svg for dom, encodes for url', async () => {
 
   expect(await getCode(bundle)).toMatchSnapshot();
 });
+
+test('loads images imported with import attributes', async () => {
+  const rawId = require.resolve('./fixtures/rollup.svg');
+  const code = image().load.call(
+    { addWatchFile() {} },
+    `${rawId}?attributes=${encodeURIComponent(JSON.stringify({ type: 'image' }))}`,
+    { rawId }
+  );
+
+  expect(code).toMatch(/^var img = "data:image\/svg\+xml,/);
+});
