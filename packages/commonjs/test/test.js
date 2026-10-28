@@ -1343,3 +1343,178 @@ test('handles bind when requireReturnsDefault is false', async () => {
   expect(result.error).toBe(undefined);
   expect(result.exports).toBe(42);
 });
+
+const fooAttributes = { foo: 'bar' };
+const withFooAttributes = (rawId) =>
+  `${rawId}${rawId.includes('?') ? '&' : '?'}attributes=${encodeURIComponent(
+    JSON.stringify(fooAttributes)
+  )}`;
+
+test('transforms CommonJS modules imported with import attributes', async () => {
+  let parse;
+  await rollup({
+    input: 'entry',
+    plugins: [
+      {
+        name: 'get-parse',
+        resolveId: (id) => id,
+        load() {
+          ({ parse } = this);
+          return '';
+        }
+      }
+    ]
+  });
+  const plugin = commonjs();
+  plugin.buildStart.call({ meta: { rollupVersion: '5.0.0' } }, { plugins: [] });
+  const { code } = await plugin.transform.call(
+    {
+      parse,
+      getModuleInfo: () => {
+        return { meta: {} };
+      }
+    },
+    'module.exports = 42;',
+    withFooAttributes('/c.js'),
+    { rawId: '/c.js', attributes: fooAttributes }
+  );
+  expect(code).toContain('export { requireC as __require };');
+});
+
+test('analyzes the module instance with the same import attributes when resolving ES imports', async () => {
+  const [resolver] = commonjs().options({}).plugins;
+  const loadedIds = [];
+  const resolved = await resolver.resolveId.call(
+    {
+      meta: { rollupVersion: '5.0.0' },
+      resolve: async () => {
+        return { id: '/c.js', attributes: fooAttributes };
+      },
+      load: async ({ id }) => {
+        loadedIds.push(id);
+        return {
+          id: withFooAttributes('/c.js'),
+          meta: { commonjs: { isCommonJS: 'withRequireFunction' } }
+        };
+      }
+    },
+    './c.js',
+    '/main.js',
+    { attributes: fooAttributes, importerRawId: '/main.js' }
+  );
+  expect(loadedIds).toEqual([{ rawId: '/c.js', attributes: fooAttributes }]);
+  expect(resolved).toEqual({
+    id: '\0/c.js?commonjs-es-import',
+    meta: {
+      commonjs: { resolved: { id: withFooAttributes('/c.js'), attributes: fooAttributes } }
+    }
+  });
+});
+
+test('does not resolve again imports from ES import proxies with import attributes', async () => {
+  const [resolver] = commonjs().options({}).plugins;
+  const rawImporter = '\0/c.js?commonjs-es-import';
+  expect(
+    await resolver.resolveId.call({}, '/c.js', withFooAttributes(rawImporter), {
+      attributes: fooAttributes,
+      importerRawId: rawImporter
+    })
+  ).toBe('/c.js');
+});
+
+test('imports the module with the same import attributes from ES import proxies', async () => {
+  const rawId = '\0/c.js?commonjs-es-import';
+  const loadedIds = [];
+  const { code } = await commonjs().load.call(
+    {
+      load: async ({ id }) => {
+        loadedIds.push(id);
+        return { moduleSideEffects: true };
+      }
+    },
+    withFooAttributes(rawId),
+    { rawId, attributes: fooAttributes }
+  );
+  expect(code).toContain('import { __require as requireC } from "/c.js" with {"foo":"bar"};');
+  expect(loadedIds).toEqual([{ rawId: '/c.js', attributes: fooAttributes }]);
+});
+
+test('imports the module with the same import attributes from entry proxies', async () => {
+  const rawId = '/c.js?commonjs-entry';
+  const requestedIds = [];
+  const code = await commonjs().load.call(
+    {
+      getModuleInfo: (id) => {
+        requestedIds.push(id);
+        return { meta: { commonjs: { isCommonJS: true } }, hasDefaultExport: true };
+      }
+    },
+    withFooAttributes(rawId),
+    { rawId, attributes: fooAttributes }
+  );
+  expect(code).toBe(
+    'export * from "/c.js" with {"foo":"bar"};export { default } from "/c.js" with {"foo":"bar"};'
+  );
+  expect(requestedIds).toEqual([{ rawId: '/c.js', attributes: fooAttributes }]);
+});
+
+test('ignores import attributes in proxies when they are not part of the module id', async () => {
+  const { code } = await commonjs().load.call(
+    {
+      load: async () => {
+        return { moduleSideEffects: true };
+      }
+    },
+    '\0/c.js?commonjs-es-import',
+    { attributes: fooAttributes }
+  );
+  expect(code).toContain('import { __require as requireC } from "/c.js";');
+});
+
+const rawEsImportProxyId = '\0/c.js?commonjs-es-import';
+const esImportProxyId = withFooAttributes(rawEsImportProxyId);
+const getCachedModuleLoader = (isCommonJS) => {
+  const loadedModules = {
+    [esImportProxyId]: {
+      meta: {
+        commonjs: { resolved: { id: withFooAttributes('/c.js'), attributes: fooAttributes } }
+      }
+    },
+    [withFooAttributes('/c.js')]: { meta: { commonjs: { isCommonJS } } }
+  };
+  return async ({ id }) => loadedModules[id];
+};
+
+test('does not re-transform cached ES import proxies with import attributes', async () => {
+  const plugin = commonjs();
+  plugin.buildStart.call({ meta: { rollupVersion: '5.0.0' } }, { plugins: [] });
+  expect(
+    await plugin.shouldTransformCachedModule.call(
+      { load: getCachedModuleLoader('withRequireFunction') },
+      {
+        id: esImportProxyId,
+        rawId: rawEsImportProxyId,
+        resolvedSources: { '/c.js': { id: withFooAttributes('/c.js'), external: false } },
+        meta: { commonjs: {} }
+      }
+    )
+  ).toBe(false);
+});
+
+test('re-transforms cached importers of a module with import attributes that is no longer wrapped', async () => {
+  const plugin = commonjs();
+  plugin.buildStart.call({ meta: { rollupVersion: '5.0.0' } }, { plugins: [] });
+  expect(
+    await plugin.shouldTransformCachedModule.call(
+      { load: getCachedModuleLoader(true) },
+      {
+        id: '/main.js',
+        rawId: '/main.js',
+        resolvedSources: {
+          './c.js': { id: esImportProxyId, rawId: rawEsImportProxyId, external: false }
+        },
+        meta: { commonjs: { isCommonJS: false } }
+      }
+    )
+  ).toBe(true);
+});

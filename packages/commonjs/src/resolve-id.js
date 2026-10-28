@@ -49,6 +49,12 @@ export function resolveExtensions(importee, importer, extensions) {
   return undefined;
 }
 
+// Rollup 5 identifies modules by their raw id together with their import attributes
+const getLoadableResolvedId = (resolved, rollupVersion) =>
+  parseInt(rollupVersion, 10) >= 5
+    ? { ...resolved, id: { rawId: resolved.id, attributes: resolved.attributes } }
+    : resolved;
+
 export default function getResolveId(extensions, isPossibleCjsId) {
   const currentlyResolving = new Map();
 
@@ -95,16 +101,17 @@ export default function getResolveId(extensions, isPossibleCjsId) {
       }
 
       if (importer) {
+        const rawImporter = resolveOptions.importerRawId || importer;
         if (
-          importer === DYNAMIC_MODULES_ID ||
+          rawImporter === DYNAMIC_MODULES_ID ||
           // Proxies are only importing resolved ids, no need to resolve again
-          isWrappedId(importer, PROXY_SUFFIX) ||
-          isWrappedId(importer, ES_IMPORT_SUFFIX) ||
-          importer.endsWith(ENTRY_SUFFIX)
+          isWrappedId(rawImporter, PROXY_SUFFIX) ||
+          isWrappedId(rawImporter, ES_IMPORT_SUFFIX) ||
+          rawImporter.endsWith(ENTRY_SUFFIX)
         ) {
           return importee;
         }
-        if (isWrappedId(importer, EXTERNAL_SUFFIX)) {
+        if (isWrappedId(rawImporter, EXTERNAL_SUFFIX)) {
           // We need to return null for unresolved imports so that the proper warning is shown
           if (
             !(await this.resolve(
@@ -142,7 +149,7 @@ export default function getResolveId(extensions, isPossibleCjsId) {
       ) {
         return resolved;
       }
-      const moduleInfo = await this.load(resolved);
+      const moduleInfo = await this.load(getLoadableResolvedId(resolved, this.meta.rollupVersion));
       const {
         meta: { commonjs: commonjsMeta }
       } = moduleInfo;
@@ -155,7 +162,10 @@ export default function getResolveId(extensions, isPossibleCjsId) {
             return resolved.id + ENTRY_SUFFIX;
           }
           if (isCommonJS === IS_WRAPPED_COMMONJS) {
-            return { id: wrapId(resolved.id, ES_IMPORT_SUFFIX), meta: { commonjs: { resolved } } };
+            return {
+              id: wrapId(resolved.id, ES_IMPORT_SUFFIX),
+              meta: { commonjs: { resolved: { ...resolved, id: moduleInfo.id } } }
+            };
           }
         }
       }
