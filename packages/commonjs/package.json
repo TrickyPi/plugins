@@ -76,7 +76,7 @@
     "@rollup/plugin-node-resolve": "^15.0.0",
     "locate-character": "^2.0.5",
     "require-relative": "^0.8.7",
-    "rollup": "^4.0.0-24",
+    "rollup": "link:../../../rollup",
     "source-map": "^0.7.4",
     "source-map-support": "^0.5.21",
     "typescript": "^4.8.3"

@@ -243,8 +243,8 @@ importers:
         specifier: ^0.8.7
         version: 0.8.7
       rollup:
-        specifier: ^4.0.0-24
-        version: 4.0.0-24
+        specifier: link:../../../rollup
+        version: link:../../../rollup
       source-map:
         specifier: ^0.7.4
         version: 0.7.4

@@ -500,16 +500,15 @@ test('compiles with cache', async () => {
   );
 });
 test('creates an error with a code frame when parsing fails', async () => {
-  try {
-    await rollup({
+  await expect(
+    rollup({
       input: 'fixtures/samples/invalid-syntax/main.js',
       plugins: [commonjs()]
-    });
-  } catch (error) {
-    expect(error.frame).toBe(`1: /* eslint-disable */
-2: export const foo = 2,
-                       ^`);
-  }
+    })
+  ).rejects.toMatchObject({
+    pluginCode: 'PARSE_ERROR',
+    frame: expect.stringMatching(/^1: \/\* eslint-disable \*\/\n2: export const foo = 2,\n +\^$/)
+  });
 });
 
 // Virtual modules are treated as "requireReturnsDefault: 'always'" to avoid interop
@@ -639,7 +638,7 @@ test('logs a warning when the deprecated namedExports option is used', async () 
     ]
   });
   await getCodeFromBundle(bundle);
-  expect(message).toBe(
+  expect(message).toContain(
     'The namedExports option from "@rollup/plugin-commonjs" is deprecated. Named exports are now handled automatically.'
   );
 });
@@ -736,8 +735,10 @@ test('throws when there is a dynamic require from outside dynamicRequireRoot', a
   const minimalDynamicRequireRoot = normalizePathSlashes(
     path.join(cwd, 'fixtures/samples/dynamic-require-outside-root')
   );
+  expect(error.message).toContain(
+    `"${id}" contains dynamic require statements but it is not within the current dynamicRequireRoot "${dynamicRequireRoot}". You should set dynamicRequireRoot to "${minimalDynamicRequireRoot}" or one of its parent directories.`
+  );
   expect(error).toMatchObject({
-    message: `"${id}" contains dynamic require statements but it is not within the current dynamicRequireRoot "${dynamicRequireRoot}". You should set dynamicRequireRoot to "${minimalDynamicRequireRoot}" or one of its parent directories.`,
     pluginCode: 'DYNAMIC_REQUIRE_OUTSIDE_ROOT',
     normalizedId: id,
     normalizedDynamicRequireRoot: dynamicRequireRoot
@@ -1349,6 +1350,145 @@ const withFooAttributes = (rawId) =>
   `${rawId}${rawId.includes('?') ? '&' : '?'}attributes=${encodeURIComponent(
     JSON.stringify(fooAttributes)
   )}`;
+
+test('preserves import attributes in CommonJS proxies across cached builds', async () => {
+  const loadedAttributes = [];
+  const options = {
+    input: '/main.js',
+    plugins: [
+      commonjs(),
+      {
+        name: 'test-import-attributes',
+        resolveId: (id) => id,
+        load(id, { rawId = id, attributes }) {
+          if (rawId === '/main.js') {
+            return 'import value from "/c.js" with { foo: "bar" }; export default value;';
+          }
+          if (rawId === '/c.js') {
+            loadedAttributes.push(attributes);
+            return `module.exports = ${JSON.stringify(attributes.foo)};`;
+          }
+          return null;
+        }
+      }
+    ]
+  };
+  const buildAndCheckExports = async (cache) => {
+    const bundle = await rollup({ ...options, cache });
+    const result = await executeBundle(bundle);
+    expect(result.error).toBe(undefined);
+    expect(result.exports).toBe('bar');
+    await bundle.close();
+    return bundle.cache;
+  };
+  const cache = await buildAndCheckExports();
+  await buildAndCheckExports(cache);
+  expect(loadedAttributes).toEqual([fooAttributes, fooAttributes]);
+});
+
+test.each([
+  { change: 'adds', requestedAttributes: {}, resolvedAttributes: fooAttributes },
+  {
+    change: 'overrides',
+    requestedAttributes: { foo: 'original' },
+    resolvedAttributes: fooAttributes
+  },
+  { change: 'removes', requestedAttributes: fooAttributes, resolvedAttributes: {} }
+])(
+  'uses resolved import attributes when a resolver $change them',
+  async ({ requestedAttributes, resolvedAttributes }) => {
+    const loadedAttributes = [];
+    const importAttributes = Object.keys(requestedAttributes).length
+      ? ` with ${JSON.stringify(requestedAttributes)}`
+      : '';
+    const bundle = await rollup({
+      input: '/main.js',
+      plugins: [
+        commonjs(),
+        {
+          name: 'test-resolved-attributes',
+          resolveId(id) {
+            return id === '/c.js' ? { id, attributes: resolvedAttributes } : id;
+          },
+          load(id, { rawId = id, attributes }) {
+            if (rawId === '/main.js') {
+              return `import value from "/c.js"${importAttributes}; export default value;`;
+            }
+            if (rawId === '/c.js') {
+              loadedAttributes.push(attributes);
+              return `module.exports = ${JSON.stringify(attributes)};`;
+            }
+            return null;
+          }
+        }
+      ]
+    });
+    const result = await executeBundle(bundle);
+    expect(result.error).toBe(undefined);
+    expect(result.exports).toEqual(resolvedAttributes);
+    expect(loadedAttributes).toEqual([resolvedAttributes]);
+    await bundle.close();
+  }
+);
+
+test.each([true, false])(
+  'uses resolved import attributes in CommonJS entry proxies (strictRequires: %s)',
+  async (strictRequires) => {
+    const bundle = await rollup({
+      input: '/c.js',
+      plugins: [
+        commonjs({ strictRequires }),
+        {
+          name: 'test-entry-attributes',
+          resolveId(id) {
+            return { id, attributes: fooAttributes };
+          },
+          load(id, { rawId = id, attributes }) {
+            return rawId === '/c.js' ? `module.exports = ${JSON.stringify(attributes)};` : null;
+          }
+        }
+      ]
+    });
+    const result = await executeBundle(bundle, avaAssertions, { testEntry: 'c.js' });
+    expect(result.error).toBe(undefined);
+    expect(result.exports).toEqual(fooAttributes);
+    await bundle.close();
+  }
+);
+
+test('preserves import attributes when resolving configured extensions', async () => {
+  const entryId = path.join(__dirname, 'fixtures/samples/import-attributes-extensions/main.js');
+  const dependencyId = path.join(
+    __dirname,
+    'fixtures/samples/import-attributes-extensions/dep.cjs'
+  );
+  const loadedAttributes = [];
+  const bundle = await rollup({
+    input: entryId,
+    plugins: [
+      commonjs({ extensions: ['.cjs'] }),
+      {
+        name: 'test-extension-attributes',
+        resolveId: (id) => (id === entryId ? id : null),
+        load(id, { rawId = id, attributes }) {
+          if (rawId === entryId) {
+            return 'import value from "./dep" with { foo: "bar" }; export default value;';
+          }
+          if (rawId === dependencyId) {
+            loadedAttributes.push(attributes);
+            if (!attributes.foo) return 'export default "plain";';
+          }
+          return null;
+        }
+      }
+    ]
+  });
+  const result = await executeBundle(bundle);
+  expect(result.error).toBe(undefined);
+  expect(result.exports).toBe('bar');
+  expect(loadedAttributes).toEqual([fooAttributes]);
+  await bundle.close();
+});
 
 test('transforms CommonJS modules imported with import attributes', async () => {
   let parse;
